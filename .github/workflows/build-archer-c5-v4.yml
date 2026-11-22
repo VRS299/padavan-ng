@@ -1,0 +1,97 @@
+
+name: Build Padavan for TP-Link Archer C5 v4
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf automake autopoint bison build-essential flex gawk \
+            gettext git gperf libtool libtool-bin pkg-config fakeroot kmod \
+            cpio doxygen texinfo help2man libncurses-dev zlib1g-dev \
+            libsqlite3-dev gcc-multilib curl dos2unix unzip wget locales \
+            xxd libltdl-dev libgmp-dev libmpfr-dev libmpc-dev \
+            libarchive-tools libblkid-dev ca-certificates zstd
+
+      - name: Set locale and GNU awk
+        run: |
+          sudo locale-gen en_US.UTF-8 ru_RU.UTF-8
+          mkdir -p "$GITHUB_WORKSPACE/hostbin"
+          ln -sf /usr/bin/gawk "$GITHUB_WORKSPACE/hostbin/awk"
+          echo "$GITHUB_WORKSPACE/hostbin" >> "$GITHUB_PATH"
+
+      - name: Check target configuration
+        run: |
+          test -f trunk/.config
+          grep -q '^CONFIG_FIRMWARE_PRODUCT_ID="TL_C5-V4"$' trunk/.config
+          grep -q '^CONFIG_FIRMWARE_INCLUDE_AMNEZIAWG=y$' trunk/.config
+          grep -q '^CONFIG_FIRMWARE_INCLUDE_ZAPRET2=y$' trunk/.config
+          grep -q '^CONFIG_FIRMWARE_WIFI2_DRIVER=2.7$' trunk/.config
+          grep -q '^CONFIG_FIRMWARE_WIFI5_DRIVER=3.0$' trunk/.config
+
+      - name: Build MIPS toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd toolchain
+          ./bootstrap
+          ./configure --enable-local
+          make -j2
+          ./ct-ng mipsel-linux-uclibc
+          grep -q '^CT_PREFIX_DIR=' .config
+          sed -i "s|^CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$GITHUB_WORKSPACE/toolchain/out/mipsel-linux-uclibc\"|" .config
+          ./ct-ng build
+          test -x "$GITHUB_WORKSPACE/toolchain/out/mipsel-linux-uclibc/bin/mipsel-linux-uclibc-gcc"
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd trunk
+          chmod +x build_firmware.sh
+          ./build_firmware.sh
+
+      - name: Check firmware output and size
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=(trunk/images/*.trx)
+          if [ "${#images[@]}" -eq 0 ]; then
+            echo "No .trx image found in trunk/images"
+            exit 1
+          fi
+          for image in "${images[@]}"; do
+            size=$(stat -c '%s' "$image")
+            echo "$image: $size bytes"
+            if [ "$size" -gt $((0x780000)) ]; then
+              echo "Image exceeds the board firmware partition."
+              exit 1
+            fi
+            file "$image"
+            sha256sum "$image"
+          done
+
+      - name: Upload firmware build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archer-c5-v4-padavan-trx
+          path: trunk/images/*.trx
+          if-no-files-found: error
+          retention-days: 7
