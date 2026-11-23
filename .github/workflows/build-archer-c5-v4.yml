@@ -56,6 +56,8 @@ jobs:
           ./ct-ng mipsel-linux-uclibc
           grep -q '^CT_PREFIX_DIR=' .config
           sed -i "s|^CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$GITHUB_WORKSPACE/toolchain/out/mipsel-linux-uclibc\"|" .config
+          make -sC ../trunk/libc download_test extract_test
+export CONFIG_LIBC_DIR="$(make -sC ../trunk/libc print-SRC_NAME)"
           ./ct-ng build
           test -x "$GITHUB_WORKSPACE/toolchain/out/mipsel-linux-uclibc/bin/mipsel-linux-uclibc-gcc"
 
